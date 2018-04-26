@@ -18,6 +18,6 @@ getPolls("house.csv")
 
 outFile = open("pollnames.csv","w")
 outFile.write("Poll\n")
-for poll in set(polls):
+for poll in sorted(set(polls)):
     outFile.write(poll + "\n")
 outFile.close
