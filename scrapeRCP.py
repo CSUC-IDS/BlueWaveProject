@@ -43,12 +43,12 @@ def make_csv(pageurl, fileName):
         polls = sortables[i].findAll('td', { "class" : "lp-poll" })
         results = sortables[i].findAll('td', { "class" : "lp-results" })
         spread = sortables[i].findAll('td', { "class" : "lp-spread" })
-        for i in range(0,len(races)):
+        for j in range(0,len(races)):
             da = date.find('b').contents[0].replace(',','')
-            ra = races[i].find('a').contents[0]
-            po = polls[i].find('a').contents[0]
-            re = results[i].find('a').contents[0].split(',')
-            sp = spread[i].find('span').contents[0]
+            ra = races[j].find('a').contents[0]
+            po = polls[j].find('a').contents[0]
+            re = results[j].find('a').contents[0].split(',')
+            sp = spread[j].find('span').contents[0]
             for r in re:
                 out_file.write(da + ',' + ra + ',' + po + ',' + r.lstrip().replace(' ',',') + ',' + sp + '\n')
     ## close the file

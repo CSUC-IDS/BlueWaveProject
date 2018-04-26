@@ -11,7 +11,7 @@ def getPolls(fileName):
         if has_header:
             next(reader)
         for row in reader:
-            polls.append(row[1])
+            polls.append(row[2])
 
 getPolls("senate.csv")
 getPolls("house.csv")
