@@ -1,0 +1,27 @@
+---
+title: "datastuff"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+midterm_polls = read.csv("C:/Users/mathstatuser/Documents/data/mid_polls.csv")
+
+approve_polls = read.csv("C:/Users/mathstatuser/Documents/data/approv_polls.csv")
+```
+
+```{r}
+approve_polls$enddate = mdy(approve_polls$enddate)
+midterm_polls$enddate = mdy(midterm_polls$enddate)
+
+approve_mean = approve_polls %>% group_by(enddate) %>% summarise(appr = mean(approve))
+
+ggplot(approve_mean, aes(x = enddate, y = appr)) + geom_point() + geom_smooth()
+
+mid_appr = left_join(midterm_polls,approve_mean, by = "enddate")
+
+mid_appr = mid_appr %>% mutate(demwin = )
+```
+
