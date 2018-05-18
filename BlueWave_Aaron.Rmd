@@ -1,0 +1,113 @@
+---
+title: "BlueWave"
+author: "Aaron Shaffer"
+date: "May 18, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE,message=FALSE,echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(lubridate)
+library(dplyr)
+library(e1071)
+library(tidyr)
+library(tools)
+library(magrittr)
+library(pander)
+```
+
+To start of my project I scraped real clear politics to gather data on polls over the past few months using 'scrapeRCP.py'  this script created a 'senate.csv' and a 'house.csv' 
+
+This data was then scraped for pollnames to compare to the other website using getUniquePolls.py, which took the data from the above script and extracted all of the pollnames from RCP.  But it turned out that there was very little overlap between these polls and the 538 data so this was not used.
+
+Data in the 'senate.csv' and 'house.csv' output files also had to be manually cleaned by hand because the website structure of RCP is a microsoft word document saved as .html so their tables are not structured cleanly for easy scrapeing.
+
+I also attempted to gather sentaors party affiliations from senate.gov using 'GetSenators.py', but instead the candidate summary action csv from the other data set had all of the information that was needed to get the part, so this script ended up not being used.
+
+```{r}
+CSA <- read.csv('~/math485/BlueWaveProject/data/CandidateSummaryAction.csv', stringsAsFactors = FALSE)
+senate <- read.csv("~/math485/BlueWaveProject/senate.csv")
+house  <- read.csv("~/math485/BlueWaveProject/house.csv")
+pander(head(senate))
+pander(head(house))
+```
+
+The columns from RCP are multiple columns in one so I used tidyr to split the columns into their sub categories.
+
+Date was split into, "Weekday", "Month", and "Day".
+
+Spread is a bit more confusing.  This is also a column that had to be manually edited a bunch because the data never showed +0 if people tied in a poll.
+Spread was split into "Victor", and "Difference".  Difference is the differnce separating the top two people in the poll.  So if there were 100 votes and 1st place got 43 and 2nd place got 42 then the spread would be +1.  Even if there were N other candidates who all got well under 40 votes only the top spread was recorded.
+
+Additionally on their website if you tied then instead of saing "Winner +0" or "Tie +0", it simply says "Tie", and provided no number.  Now thats what I call real clear.
+So, any NA for this value is 0.  because they couldn't be consitent and say Tie +0
+```{r}
+senate <- separate(senate,Date, into = c("Weekday","Month","Day"), convert = TRUE, sep = " ")
+house <- separate(house,Date, into = c("Weekday","Month","Day"), convert = TRUE, sep = " ")
+senate <- separate(senate,Spread, into = c("Victor","Difference"), convert = TRUE, sep = " ")
+house <- separate(house,Spread, into = c("Victor","Difference"), convert = TRUE, sep = " ")
+senate$Difference[is.na(senate$Difference)] <- 0
+house$Difference[is.na(house$Difference)] <- 0
+```
+
+Next I had to join the CSA and the RCP datasets in order to get party affiliations 
+
+I only used the candidate name, state and party affiliation columns from the CSA datset to do so.
+
+```{r}
+CSA.small <- CSA[,c('can_nam','can_sta','can_par_aff')]
+head(CSA.small)
+CSA.split <- separate(CSA.small,can_nam,into = c("Results","first_name"),sep=", ")
+CSA.split$Results <- toTitleCase(tolower(CSA.split$Results))
+
+senate_new <- left_join(senate, CSA.split, by="Results")
+house_new <- left_join(house,CSA.split, by="Results")
+
+head(senate_new)
+head(house_new)
+```
+
+In order for the columns to be merged since the way names and words were capitalized were different I had to do some fenageling to get the 'can_name' column to match the readable RCP dataset.  The CSA can_nam column had to be split into first and last name which I renamed to match RCP for the left_join.
+
+
+This part is what gave me the most headache.
+```{r}
+senate_new$Votes <- as.numeric(senate_new$Votes)
+house_new$Votes <- as.numeric(house_new$Votes)
+
+senate_aggvotes <- na.omit(senate) %>% group_by(Weekday, Month, Day,Race,Poll,Victor,Difference) %>% mutate(Total.Votes = sum(Votes)) %>% unique()
+house_aggvotes <- na.omit(house) %>% group_by(Weekday, Month, Day,Race,Poll,Victor,Difference) %>% mutate(Total.Votes = sum(Votes)) %>% unique()
+
+senate.final <- na.omit(left_join(senate_new,senate_aggvotes))
+house.final <- na.omit(left_join(house_new,house_aggvotes))
+
+senate.final$perVotes <- senate.final$Votes/senate.final$Total.Votes
+house.final$perVotes <- house.final$Votes/house.final$Total.Votes
+```
+It was in the above code that I learned that I needed to manually touch up both RCP datasets.  But this accomplished was aggreagating the total number of votes in each poll so that a % of support by candidate/state/party etc could be calculated.
+
+
+```{r}
+senate.model <- glm(perVotes ~ 0 + Month + Day + can_sta + can_par_aff, data = senate.final)
+summary(senate.model)
+senatepred.votes <- predict(senate.model,newdata = senate.final)
+senate.END <- cbind(senate.final,senatepred.votes)
+senate.total.votes <- senate.END %>% group_by(can_par_aff) %>% summarise(mean(senatepred.votes))
+names(senate.total.votes) <- c("Party","MeanVotes")
+pander(rbind(senate.total.votes$Party,round(senate.total.votes$MeanVotes * 33, digits = 3)))
+
+
+
+house.model <- glm(perVotes ~ 0 + Month + Day + can_sta + can_par_aff, data = house.final)
+summary(house.model)
+housepred.votes <- predict(house.model,newdata = house.final)
+house.END <- cbind(house.final,housepred.votes)
+house.total.votes <- house.END %>% group_by(can_par_aff) %>% summarise(mean(housepred.votes))
+names(house.total.votes) <- c("Party","MeanVotes")
+pander(rbind(house.total.votes$Party,round(house.total.votes$MeanVotes * 435, digits = 3)))
+```
+
+Finally I looked at what variables I had left to build a model with and realized that the uniqueness of so many of the variables are completely meangless if you want to use the data to make predictions for other candidates so I ended up left with only the Month, Day of the month, State and Political party from all of the above data to predict support.  In theory I could have left in additional columns from the CSA dataset to use as predictors but I didn't really realize that until just now doing this write up.  
+
+As far as predictions goes this is the mean % of votes across all states (in the dataset) expected of each party * number of seats available.  Obviously our election system doesn't work like this.  In order to estimate the true number of seats you would need to use this model to predict the expect % of support by party by state, and then use that to determine a victor on a state by state basis, and then extrapolate that to the number of seats per state.  That would give you the expected number of seats of a given party by state.  Atleast thats the theory behind the model(s).
