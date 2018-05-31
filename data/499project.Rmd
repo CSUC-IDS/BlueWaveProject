@@ -7,9 +7,9 @@ output: html_document
 library(dplyr)
 library(lubridate)
 library(ggplot2)
-midterm_polls = read.csv("C:/Users/mathstatuser/Documents/data/mid_polls.csv")
+midterm_polls = read.csv("/Users/Ricardo/Documents/Math499/BlueWaveProject/data/mid_polls.csv")
 
-approve_polls = read.csv("C:/Users/mathstatuser/Documents/data/approv_polls.csv")
+approve_polls = read.csv("/Users/Ricardo/Documents/Math499/BlueWaveProject/data/approv_polls.csv")
 ```
 
 ```{r}

@@ -1,0 +1,238 @@
+---
+title: "Final Project: Modeling Midterm Congressional Elections"
+author: "Ricardo Alexandro Aguilar"
+date: "May 3, 2018"
+output: pdf_document
+fontsize: 12pt
+---
+
+```{r setup, echo = FALSE,  warning=FALSE, message=FALSE}
+set.seed(485)
+library(randomForest)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(gridExtra)
+library(pander)
+
+##################change path here##########################
+midterm_polls = read.csv("/Users/Ricardo/Documents/Math499/BlueWaveProject/data/mid_polls.csv")
+approve_polls = read.csv("/Users/Ricardo/Documents/Math499/BlueWaveProject/data/approv_polls.csv")
+############################################################
+
+approve_polls$enddate = mdy(approve_polls$enddate)
+midterm_polls$enddate = mdy(midterm_polls$enddate)
+approve_mean = approve_polls %>% group_by(enddate) %>% summarise(appr = mean(approve))
+mid_appr = left_join(midterm_polls,approve_mean, by = "enddate")
+mid_appr = mid_appr %>% mutate(demwin = dem - rep) %>% 
+  select(-multiversions, -tracking, -url, -timestamp, -startdate,
+         -createddate, -question_id, -grade, -dem, -rep)
+ndata <- mid_appr %>% select(-adjusted_dem, -adjusted_rep)
+
+
+training <- sample(1:nrow(mid_appr), nrow(mid_appr)/2)
+lm_train <- mid_appr[training,]
+lm_test <- mid_appr[-training,]
+
+knitr::opts_chunk$set(echo = FALSE,  warning=FALSE, message=FALSE, fig.align = 'center', comment = "")
+```
+  
+# Data Management
+  
+We started by merging congressional generic ballet polls and Trumps' approval datasets from the FiveThirtyEight website. The dataset was then subsetted to only contain the variables of interest which also resulted in not missing any data. The dataset's observations are the results and details of national polls from January 1, 2017 to April 19, 2018. A new measure was created for the difference between the percent support for Democrats and Republicans such that a positive value means there is more support for Democrats. This variable was used to determine whether Democrats will have the majority (or super majority) in both the House of Representatives and the Senate as a result of the upcoming midterm elections. This was done by finding the probability that a Democrat will win a seat and multiplying it by the available seats to find the predicted total amount of seats Democrats will have in the House and Senate. These totals are used to predict whether Democrats will have a majority or super majority. 
+  
+```{r, fig.height=3, fig.width=4}
+ggplot(mid_appr, aes(x=demwin)) + geom_density(col="cyan4") + 
+  geom_histogram(aes(y=..density..), colour="black", fill=NA) + theme_bw() + 
+  ylab("Density") + ggtitle("Difference in % Support") + xlab("") +
+  geom_vline(xintercept=mean(mid_appr$demwin), col = "red") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+  
+The density plot shows us that the distribution of the difference between the percent support for Democrats and Republicans is normal, with a mean of 7.52, and a standard deviation of 3.12.
+  
+# Linear Models
+
+```{r}
+mod1 <- lm(demwin ~ population + weight + appr + enddate + samplesize + adjusted_dem + adjusted_rep, data = lm_train)
+mod2 <- lm(demwin ~ population + weight + appr + enddate + samplesize, data = lm_train)
+a <- sqrt(mean(mod1$residuals^2))
+b <- sqrt(mean(mod2$residuals^2))
+mods <- data.frame(a, b)
+mods$'W/ Adjusted Dem/Rep' <- a
+mods$'W/O Adjusted Dem/Rep' <- b
+set.caption("RMSE for Both Linear Models", permanent = FALSE)
+pander(mods[, 3:4])
+```
+  
+The two linear models used a training set. Both models used population, weight, percent who approve of Trump, the end date of the poll, and the poll's sample size as predictors. However, one of the models includes adjusted support for Democrats (cor = .62, VIF = 1.466) and Republicans (cor = -0.661, VIF = 1.993) as predictors. Polls are weighted on their sample size, pollsters' historical accuracy, and methodological tests. *Population* categorizes polls into three groups: all adults, registered voters, and likely voters. Looking just at the values for RMSE, the model that includes adjusted support for Democrats and Republicans is superior since its RMSE is lower.  
+  
+  
+\begin{center}
+\underline{\textbf{\large W/ Adjusted Dem/Rep}}
+\end{center}
+
+```{r, fig.height=4.3, fig.width=6}
+par(mfrow=c(2,2), oma=c(0,0,0,0)) 
+plot(mod1, cex=.8)
+```
+  
+We can see from the Normal Q-Q plot that the residuals deviate from line at lower theoretical value which raises concerns regarding whether the residuals are normally distributed. The Scale-Location plot also raises concerns since the residuals do not seem to be randomly spread out at lower fitted values. This tells us that the model might not work well with the data.
+
+\newpage
+\begin{center}
+\underline{\textbf{\large W/O Adjusted Dem/Rep}}
+\end{center}
+```{r, fig.height=5, fig.width=6}
+par(mfrow=c(2,2), oma=c(0,0,0,0)) # Create a 2 x 2 grid of plots 
+plot(mod2, cex=.8)
+```
+  
+There is no distinctive pattern in the Residuals vs Fitted plot. We can see that the residuals are normally distributed since they do not deviate far from the line. In the Scale-Location plot, the line is horizontal and the residuals seem randomly spread. There are no severe violations in the last plot. The four plots show us that the model works well for the data. However, it is important to note that the residuals are a lot bigger in magnitude than the first model. We will use this model.
+\newpage
+
+# Random Forests
+  
+Two models were considered: one with adjusted % support for Democrats and Republicans, and one without.
+  
+```{r}
+trees <- c(1, 1, 1, 5, 5, 5, 20, 20, 20, 40, 40, 40, 60, 60, 60, 80, 80, 80, 
+           100, 100, 100, 200, 200, 200)
+m <- c("p", "p/2", "$p^{1/2}$", "p", "p/2", "$p^{1/2}$", "p", "p/2", "$p^{1/2}$", "p", "p/2", "$p^{1/2}$", 
+       "p", "p/2", "$p^{1/2}$", "p", "p/2", "$p^{1/2}$", "p", "p/2", "$p^{1/2}$", "p", "p/2", "$p^{1/2}$")
+rmse2 <- rmse1 <- rep.int(0, 24)
+results <- data.frame(m, trees, rmse1, rmse2)
+```
+  
+```{r, cache=TRUE}
+#######################Finding Lowest MSE####################
+set.seed(485)
+n <- 1:nrow(mid_appr)
+group <- sample(1:3, size=nrow(mid_appr), replace=TRUE, prob=c(0.35,0.35,0.3))
+sets <- data.frame(n,group)
+
+train <- sets[sets$group==1,]
+train <- train$n
+
+validation <- sets[sets$group==2,]
+validation <- validation$n
+
+test <- sets[sets$group==3,]
+test <- test$n
+
+dem.test=mid_appr[validation ,"demwin"]
+
+ndem.test=ndata[validation ,"demwin"]
+
+m.test <- c(12, 6, 4)
+nm.test <- c(10, 5, 3)
+
+tree.test <- c(1, 5, 20, 40, 60, 80, 100, 200)
+k <- 1
+for (i in 1:8){
+  for(j in 1:3){
+    bag.dem <- randomForest(demwin~., data = mid_appr, subset = train, mtry = m.test[j], 
+                            importance = TRUE, ntree = tree.test[i])
+    yhat.bag = predict(bag.dem,newdata=mid_appr[validation,])
+    results$rmse1[k] <- sqrt(mean((yhat.bag-dem.test)^2))
+    
+    nbag.dem <- randomForest(demwin~., data = ndata, subset = train, mtry = nm.test[j], 
+                            importance = TRUE, ntree = tree.test[i])
+    nyhat.bag = predict(nbag.dem, newdata = ndata[validation,])
+    results$rmse2[k] <- sqrt(mean((nyhat.bag-ndem.test)^2))
+    k <- k + 1
+    }
+}
+```
+
+```{r, fig.height=4, fig.width=8}
+p1 <- ggplot(results, aes(x = trees, y = rmse1, group = m, col = m)) + geom_line() + geom_point() +
+  ylab("RMSE") + xlab("Number of Trees") + theme_bw() +
+  scale_colour_discrete(name  = "Amount of \nPredictors\n", 
+                            breaks=c("$p^{1/2}$", "p", "p/2"),
+                            labels=c(expression(sqrt(p)), "p", expression(frac(p,2)))) +
+  theme(legend.direction = 'horizontal', 
+        legend.position = 'bottom',
+        legend.key = element_rect(size = 5),
+        legend.key.size = unit(1.5, 'lines')) + #ylim(0, 2.5) + xlim(0,200) +
+  ggtitle("W/ Adjusted Dem/Rep") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+p2 <- ggplot(results, aes(x = trees, y = rmse2, group = m, col = m)) + geom_line() + geom_point() +
+  ylab("RMSE") + xlab("Number of Trees") + theme_bw() +
+  scale_colour_discrete(name  = "Amount of \nPredictors\n", 
+                            breaks=c("$p^{1/2}$", "p", "p/2"),
+                            labels=c(expression(sqrt(p)), "p", expression(frac(p,2)))) +
+  theme(legend.direction = 'horizontal', 
+        legend.position = 'bottom',
+        legend.key = element_rect(size = 5),
+        legend.key.size = unit(1.5, 'lines')) + #xlim(0,200) + ylim(2.5, 9) +
+  ggtitle("W/O Adjusted Dem/Rep") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+grid.arrange(p1, p2, nrow = 1)
+```
+  
+The *validation set approach* was used as the method for cross-validation by randomly selecting a third of the dataset as the training set, another third as the validation set, and rest as the testing set. Multiple combinations of number of trees (1, 5, 20, 40, 60, 80, 100, and 200) and predictors (p, $\frac{p}{2}$, $\sqrt{p}$ where p is the total possible predictors in the dataset) were considered to attain the lowest RMSE for both models using the validation set. $p$ was set to 14 for the first model and 10 for the second model. In the first plot, we can see the lowest RMSE is attained where 200 trees are used and there are $p$ predictors. In the second plot, we can see the lowest RMSE is attained where 200 trees are used and there are $\frac{p}{2}$ predictors. These are the parameters that will be used in their respective models. 
+
+\newpage
+```{r, fig.height=3.75, fig.width=6}
+set.seed(485)
+bag.dem <- randomForest(demwin~., data = mid_appr, subset = train, mtry = 12, importance = TRUE, ntree = 200)
+
+varImpPlot(bag.dem, main = 'W/ Adjusted Dem/ Rep using Testing Set')
+yhat.bag = predict(bag.dem, newdata=mid_appr[test,])
+dem.test=mid_appr[test ,"demwin"]
+plot(yhat.bag, dem.test)
+abline(0,1)
+```
+  
+This random forest model is able to explain 94.05% of the variance in the difference between the percent support for Democrats and Republicans. We can see that the variables for the adjusted percent of support for Democrats and Republicans are by far the most important variables in the model while $pollster$ is the third most important. In the last plot we can see that the predictions from our model are very close to the "true" values from our testing set.
+  
+\newpage
+```{r, fig.height=3.5, fig.width=6}
+set.seed(485)
+bag.dem <- randomForest(demwin~., data = ndata, subset = train, mtry = 5, importance = TRUE, ntree = 200)
+varImpPlot(bag.dem, main = 'W/O Adjusted Dem/Rep using Testing Set')
+nyhat.bag = predict(bag.dem, newdata=ndata[test,])
+ndem.test=ndata[test ,"demwin"]
+plot(nyhat.bag, ndem.test)
+abline(0,1)
+```
+  
+This random forest model is able to explain 58.69% of the variance in the difference between the percent support for Democrats and Republicans. We can see that the pollster and the percent who approve of Trump ($appr$) are the most important variables in the model. In the last plot we can see that the predictions from our model are not as close to the "true" values from our testing set compared to the previous model.
+  
+```{r}
+c <- sqrt(mean((yhat.bag-dem.test)^2))
+d <- sqrt(mean((nyhat.bag-ndem.test)^2))
+mods2 <- data.frame(c, d)
+mods2$'W/ Adjusted Dem/Rep' <- c
+mods2$'W/O Adjusted Dem/Rep' <- d
+set.caption("RMSE for Both Random Forest Models", permanent = FALSE)
+pander(mods2[, 3:4])
+```
+  
+The RMSE for both models is calculated using the testing set. The model with adjusted percent support for Democrats and Republicans has a lower RMSE than the one without those variables. However, we will use the second model since the first model has an obvious advantage.
+  
+\newpage
+
+# Results
+
+```{r, include=FALSE}
+preds <- predict(mod2, lm_test[lm_test$population == "lv",])
+prop.table(table(preds > 2.717))
+.85*435
+.85*35
+
+testd <- ndata[test,]
+testd <- testd[testd$population == "lv",]
+nyhat.bag = predict(bag.dem, newdata=testd)
+prop.table(table(nyhat.bag > 1.992))
+.818*435
+.818*35
+```
+  
+The probability of a Democrat winning a seat was calculated for both the linear model and the random forest model by determining the proportion of predicted values that were greater than the RMSE of their respective models using the testing set. A predicted value of 0 means that a Democrat is predicted to tie with a Republican, and if the value was greater than the RMSE, then it was considered "far enough" from 0 that the Democrat is likely to win. Predictions were only made for populations of likely voters. Since not all adults can vote and not all registered voters will actually vote, a population of likely voters is more representative of the voter turnout. We will define a supermajority in the House of Representatives as having 218 seats and a supermajority in the Senate as having 67 seats. Democrats have 23 seats that will not be up in the 2018 midterm elections, so they must be added to the predicted totals to correctly calculate the amount of seats they will have after the elections. With our definition of a supermajority, Democrats cannot have a supermajority in the Senate since the maximum amount of seats they can possibly have after the elections is 58. 
+\newline
+\newline
+The linear model predicts that the Democrats will have a supermajority (and majority) in the House of Representatives (.85 $*$ 435 = 370 seats) and a majority in the Senate (.85 $*$ 35 = 30 seats, 30 + 23 = 53 seats after the elections). The random forest model predicts that the Democrats will have a supermajority (and majority) in the House of Representatives (.818 $*$ 435 = 356 seats) and a majority in the Senate (.818 $*$ 35 = 29 seats, 29 + 23 = 52 seats after the elections). It is important to note that the dataset uses national polls, so it does not have any state-level data. This prevents us from creating a much more accurate model that takes into consideration how the elections actually work (the entire nation does not vote for every district's representative and every state's senators). In summary, both the models predicted that Democrats will have a supermajority in the House of Representatives and a majority in the Senate.
